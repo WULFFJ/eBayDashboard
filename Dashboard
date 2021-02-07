@@ -1,0 +1,173 @@
+###### eBay Seller Dashboard for oAuth Queries
+###### Final Tables to use: PayoutSummary60 Payouts Traffic SellerFunds and OHistory
+###### More can be added, as there are many requests available on eBay's API.
+###### There are not notes on the Pandas work below, because my main emphasis is to help others with eBay's horrific API requests.  I truly hope this makes the process easier for some of you.
+
+###### Imports
+
+import datetime as dt
+from datetime import timedelta, date
+import pandas as pd
+import urllib
+import webbrowser
+from urllib import parse
+import selenium as webdriver
+import requests
+import json
+import base64
+import time
+from bs4 import BeautifulSoup
+
+pd.set_option("max_colwidth", 300) ######Sets the Jupyter Notebook wider to see mor of what you are typing (script creation purpose)
+
+###### Please note: Copy scopes from other script for getting the refresh token and paste in the scopes parameter.  This is urlencoded.
+###### rtoken: This is the refresh token generated from the Token Generator script.  This will allow you to have a new access token everytime you re-run this script.  The refresh token is good for 18 months.  The Access token is good for 2 hours.
+
+###### Refresh Token to new oAuth Query
+
+scopes=urllib.parse.quote('https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.marketing.readonly https://api.ebay.com/oauth/api_scope/sell.marketing https://api.ebay.com/oauth/api_scope/sell.inventory.readonly https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account.readonly https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly https://api.ebay.com/oauth/api_scope/sell.fulfillment https://api.ebay.com/oauth/api_scope/sell.analytics.readonly https://api.ebay.com/oauth/api_scope/sell.finances https://api.ebay.com/oauth/api_scope/sell.payment.dispute https://api.ebay.com/oauth/api_scope/commerce.identity.readonly')
+
+fulfillment='https://api.ebay.com/identity/v1/oauth2/token'
+rtoken='YOURREFRESHTOKENGOESHEREBETWEENQUOTES'
+
+secret='YOURCLIENTSECRETBETWEENQUOTES'  ###### Client Secret for production oAuth application
+cid='YOURCLIENTIDBETWEENTHESEQUOTES'  ###### Client ID for production oAuth application
+
+aencoded='Basic ' + base64.b64encode((cid + ':' + secret).encode()).decode()
+headers = {
+        "Content-Type" : "application/x-www-form-urlencoded",
+        "Authorization" : aencoded
+        }
+
+rtbody=('grant_type=refresh_token&'f'refresh_token={rtoken}&'f'scope={scopes}')
+
+rfrequest=requests.post(fulfillment,headers=headers, data=rtbody).json()
+print(rfrequest)
+
+at=rfrequest['access_token']   #Grabs the Auth Token response and stores as AT
+
+###### Header for request part of queries
+
+#Header construction for eBay queries
+part1= 'Authorization'
+part2= 'Baerer ' + at
+part3= 'X-EBAY-C-MARKETPLACE-ID:EBAY_US'
+part4= 'Accept:application/json'
+header= {'Authorization':'Bearer '+ at + 'X-EBAY-C-MARKETPLACE-ID:EBAY_US'+ 'Accept:application/json'}
+
+#Payout Summary query - notice there is m1 and m2 to allow back to back months
+cdtime=date.today()
+sday= cdtime - timedelta(30)
+cdtime=cdtime.strftime('%Y%m%d')
+sday=sday.strftime('%Y%m%d')
+filter30= 'date_range:'+'%5B'+sday + '..' + cdtime + '%5D'
+m1ps = 'https://apiz.ebay.com/sell/finances/v1/payout_summary?filter=payoutDate:{filter30}'
+r=requests.get(m1ps, headers=header).json()
+m1payoutsummary=pd.json_normalize(r)
+
+#Second Payout Summary Query
+cdtime=date.today()
+days31= cdtime - timedelta(30)
+days60= days31 - timedelta(30)
+days31=days31.strftime('%Y%m%d')
+days60= days60.strftime('%Y%m%d')
+filter60= 'date_range:'+'%5B'+days31 + '..' + days60 + '%5D'
+m2ps = 'https://apiz.ebay.com/sell/finances/v1/payout_summary?filter=payoutDate:{filter60}'
+rps60=requests.get(m2ps, headers=header).json()
+m2payoutsummary=pd.json_normalize(rps60)
+
+#appends the two dataframes for the 30 and 60 day intervals, so they can be compared in Power BI.
+PayoutSummary60 = m1payoutsummary.append(m2payoutsummary)   #PayoutSummary60 is an end product table
+
+#Payout Query
+url2= 'https://apiz.ebay.com/sell/finances/v1/payout?'
+r2=requests.get(url2, headers=header).json()
+r2= pd.DataFrame(r2)
+Payouts=pd.json_normalize(r2["payouts"])   ###### Payouts is an end-product table
+print(Payouts)
+
+#redid the date variables for the next query
+url3 = (f'https://api.ebay.com/sell/analytics/v1/traffic_report?filter=marketplace_ids:%7BEBAY_US%7D,{filter30}&dimension=DAY&metric=LISTING_VIEWS_TOTAL,LISTING_IMPRESSION_TOTAL,SALES_CONVERSION_RATE')
+r3=requests.get(url3, headers=header).json()
+r3=pd.DataFrame(pd.json_normalize(r3))
+print(r3)
+
+r3=r3.drop(['warnings','dimensionMetadata','header.dimensionKeys'],axis=1)
+
+records=pd.DataFrame(r3['records'])
+records=records.explode('records')
+records=pd.json_normalize(records['records'])
+ta1=pd.DataFrame(records['dimensionValues'])
+ta2=ta1.explode('dimensionValues')
+ta2=pd.json_normalize(ta2['dimensionValues'])
+ta2=ta2.drop(columns=['applicable'],axis=0)
+ta3=pd.DataFrame(records['metricValues'])
+ta3=ta3.explode('metricValues')
+ta3=pd.json_normalize(ta3['metricValues'])
+ta3=ta3.drop(columns=['applicable'],axis=0)
+hm=pd.DataFrame(r3['header.metrics'])
+hm=hm.explode('header.metrics')
+hm=pd.json_normalize(hm['header.metrics'])
+hm=hm.drop(columns=['key','dataType'], axis=0)
+result = pd.concat([hm, ta3], axis=1).reindex(hm.index)
+print(result)
+r3=r3.drop(columns=['header.metrics','records'], axis=0)
+r3.melt()
+Traffic=pd.concat([result, r3], axis=1).reindex(result.index)   ######Traffic is an end-product table
+
+url4='https://apiz.ebay.com/sell/finances/v1/seller_funds_summary'
+#Will come up error if no try and except, if you don’t have an order in process or on its way
+try:
+    sf=requests.get(url4, headers=header).json()
+except:
+    print('None')
+    
+try:    
+    Sellerfunds=pd.json_normalize(sf) #######Sellerfunds (above) is an end product table 
+    
+except:
+    print('None')
+
+#######Sellerfunds (above) is an end product table 
+   
+dttoday = date.today()
+sixtyday= dttoday - timedelta(60)
+dttoday = str(dttoday)
+sixtyday= str(dttoday)
+filter060 = 'date_range:'+'%5B' + dttoday + '..' + sixtyday + '%5D'
+
+###### Order History Table Request and Pandas work below
+url5='https://api.ebay.com/sell/fulfillment/v1/order?filter=creationdate:{filter060}&limit=500&offset=0'
+orders=requests.get(url5, headers=header).json()
+orders=pd.json_normalize(orders)
+
+from datetime import datetime
+dttoday = datetime.now()
+sixtyday= dttoday - timedelta(60)
+print(sixtyday)
+dttoday = str(dttoday)
+sixtyday= str(sixtyday)
+filter060 = 'date_range:'+'%5B' + dttoday + '..' + sixtyday
+dttoday = dttoday[:10] + 'T' + dttoday[10:] + 'Z'
+dttoday= dttoday.replace(" ","")
+sixtyday= '%5B' + sixtyday[:10] + 'T00:00:00.001Z..'+ '%5D'
+filter060= str(sixtyday)
+print(filter060)
+
+url5='https://api.ebay.com/sell/fulfillment/v1/order?filter=creationdate:'+filter060+'&limit=500&offset=0'
+orders=requests.get(url5, headers=header).json()
+orders=pd.json_normalize(orders)
+orders=orders.explode('orders')
+orders=pd.json_normalize(orders['orders'])
+orders=orders.explode('fulfillmentStartInstructions')
+orders=orders.explode('lineItems')
+orders=orders.explode('paymentSummary.payments')
+o1=pd.DataFrame(orders['lineItems'])
+o1=pd.json_normalize(o1['lineItems'])
+o2=pd.DataFrame(orders['fulfillmentStartInstructions'])
+o2=pd.json_normalize(o2['fulfillmentStartInstructions'])
+o3=pd.DataFrame(orders['paymentSummary.payments'])
+o3=pd.json_normalize(o3['paymentSummary.payments'])
+OSummary=pd.concat([o1, o2, o3], axis=1).reindex(result.index)
+orders=orders.drop(columns=['fulfillmentStartInstructions','lineItems','paymentSummary.payments'])
+OHistory=pd.concat([OSummary,orders], axis=1).reindex(result.index)  #####Final output table
