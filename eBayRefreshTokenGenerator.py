@@ -1,5 +1,5 @@
 ###### This will only need ran once every 18 months.  The refresh token can be used to get new Auth Tokens for the eBay Dashboard Script.  If you get captcha during this process, re-run this script. It happens about 20% of the time.
-
+###### Everything with YOURWHATEVER will need replaced with your actual informatinn from your own eBay Developer Account.
 import pandas as pd
 import urllib
 import webbrowser
