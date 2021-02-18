@@ -4,22 +4,26 @@
 ###### There are not notes on the Pandas work below, because my main emphasis is to help others with eBay's horrific API requests.  I truly hope this makes the process easier for some of you.
 
 ###### Imports
-
+from IPython.core.display import display, HTML
+display(HTML("<style>.container { width:80% !important; }</style>"))
 import datetime as dt
 from datetime import timedelta, date
 import pandas as pd
 import urllib
-import webbrowser
+import numpy as np
 from urllib import parse
-import selenium as webdriver
 import requests
 import json
 import base64
 import time
 from bs4 import BeautifulSoup
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
+import geocoder
 
-pd.set_option("max_colwidth", 300) ######Sets the Jupyter Notebook wider to see mor of what you are typing (script creation purpose)
 
+pd.set_option('display.max_colwidth',-1) ######Sets the Jupyter Notebook wider to see mor of what you are typing (script creation purpose)
+pd.set_option('display.expand_frame_repr', False)
 ###### Please note: Copy scopes from other script for getting the refresh token and paste in the scopes parameter.  This is urlencoded.
 ###### rtoken: This is the refresh token generated from the Token Generator script.  This will allow you to have a new access token everytime you re-run this script.  The refresh token is good for 18 months.  The Access token is good for 2 hours.
 
@@ -28,10 +32,10 @@ pd.set_option("max_colwidth", 300) ######Sets the Jupyter Notebook wider to see 
 scopes=urllib.parse.quote('https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.marketing.readonly https://api.ebay.com/oauth/api_scope/sell.marketing https://api.ebay.com/oauth/api_scope/sell.inventory.readonly https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account.readonly https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly https://api.ebay.com/oauth/api_scope/sell.fulfillment https://api.ebay.com/oauth/api_scope/sell.analytics.readonly https://api.ebay.com/oauth/api_scope/sell.finances https://api.ebay.com/oauth/api_scope/sell.payment.dispute https://api.ebay.com/oauth/api_scope/commerce.identity.readonly')
 
 fulfillment='https://api.ebay.com/identity/v1/oauth2/token'
-rtoken='YOURREFRESHTOKENGOESHEREBETWEENQUOTES'
+rtoken='XXXXYOURTOKENFROMTHEOTHERSCRIPTHERE'
 
-secret='YOURCLIENTSECRETBETWEENQUOTES'  ###### Client Secret for production oAuth application
-cid='YOURCLIENTIDBETWEENTHESEQUOTES'  ###### Client ID for production oAuth application
+secret='XXXYOURCLIENTSECRETXXX'  ###### Client Secret for production oAuth application
+cid='XXXYOURCLIENTIDGOESHEREXXX'  ###### Client ID for production oAuth application
 
 aencoded='Basic ' + base64.b64encode((cid + ':' + secret).encode()).decode()
 headers = {
@@ -42,7 +46,7 @@ headers = {
 rtbody=('grant_type=refresh_token&'f'refresh_token={rtoken}&'f'scope={scopes}')
 
 rfrequest=requests.post(fulfillment,headers=headers, data=rtbody).json()
-print(rfrequest)
+
 
 at=rfrequest['access_token']   #Grabs the Auth Token response and stores as AT
 
@@ -74,49 +78,94 @@ days60= days60.strftime('%Y%m%d')
 filter60= 'date_range:'+'%5B'+days31 + '..' + days60 + '%5D'
 m2ps = 'https://apiz.ebay.com/sell/finances/v1/payout_summary?filter=payoutDate:{filter60}'
 rps60=requests.get(m2ps, headers=header).json()
+print(rps60)
+
 m2payoutsummary=pd.json_normalize(rps60)
+
 
 #appends the two dataframes for the 30 and 60 day intervals, so they can be compared in Power BI.
 PayoutSummary60 = m1payoutsummary.append(m2payoutsummary)   #PayoutSummary60 is an end product table
+PayoutSummary60.head()
 
 #Payout Query
 url2= 'https://apiz.ebay.com/sell/finances/v1/payout?'
 r2=requests.get(url2, headers=header).json()
 r2= pd.DataFrame(r2)
+
 Payouts=pd.json_normalize(r2["payouts"])   ###### Payouts is an end-product table
-print(Payouts)
+
 
 #redid the date variables for the next query
+
+#Traffic Report Query
 url3 = (f'https://api.ebay.com/sell/analytics/v1/traffic_report?filter=marketplace_ids:%7BEBAY_US%7D,{filter30}&dimension=DAY&metric=LISTING_VIEWS_TOTAL,LISTING_IMPRESSION_TOTAL,SALES_CONVERSION_RATE')
 r3=requests.get(url3, headers=header).json()
-r3=pd.DataFrame(pd.json_normalize(r3))
-print(r3)
 
-r3=r3.drop(['warnings','dimensionMetadata','header.dimensionKeys'],axis=1)
 
-records=pd.DataFrame(r3['records'])
-records=records.explode('records')
-records=pd.json_normalize(records['records'])
-ta1=pd.DataFrame(records['dimensionValues'])
-ta2=ta1.explode('dimensionValues')
-ta2=pd.json_normalize(ta2['dimensionValues'])
-ta2=ta2.drop(columns=['applicable'],axis=0)
-ta3=pd.DataFrame(records['metricValues'])
-ta3=ta3.explode('metricValues')
-ta3=pd.json_normalize(ta3['metricValues'])
-ta3=ta3.drop(columns=['applicable'],axis=0)
-hm=pd.DataFrame(r3['header.metrics'])
-hm=hm.explode('header.metrics')
-hm=pd.json_normalize(hm['header.metrics'])
-hm=hm.drop(columns=['key','dataType'], axis=0)
-result = pd.concat([hm, ta3], axis=1).reindex(hm.index)
-print(result)
-r3=r3.drop(columns=['header.metrics','records'], axis=0)
-r3.melt()
-Traffic=pd.concat([result, r3], axis=1).reindex(result.index)   ######Traffic is an end-product table
+r3=pd.json_normalize(r3)
+
+
+
+r3m=pd.DataFrame(r3['records'])
+r3=(r3.explode('records')).reset_index(drop=True)
+
+r3d=pd.json_normalize(r3['records'],record_path='dimensionValues')
+
+#extracting the date to a temporary dataframe
+for v in r3d['value']:
+    r3['date']=r3d['value']
+del r3d
+
+r3m=r3m.explode('records')
+
+#normalizing column containing the actual metrics
+r3m=pd.json_normalize(r3m['records'],record_path='metricValues')
+
+num=0
+rw=0
+lst=[]
+for v in r3m['value']:
+    lst.append(v)
+# adding 3 new columns to the original dataframe and carefully 
+#calculating which column the value should be in via a for loop
+
+
+r3['TotalImpressions']=''
+r3['TotalViews']=''
+r3['ConversionRate']=''
+
+for v in lst:
+    if num==0 :
+        r3['TotalImpressions'].iloc[rw]=v
+        num=num+1
+        rw=rw
+        continue
+    
+    elif num < 2:
+        r3['TotalViews'].iloc[rw]=v
+        num=num+1
+        rw=rw
+        continue
+        
+    elif num < 3:
+        r3['ConversionRate'].iloc[rw]=v 
+        rw=rw+1
+        num = 0
+        continue
+        
+#drop the columns that the deeply nested data was in at one point
+r3=r3.drop(columns=['records','header.dimensionKeys','header.metrics'])
+#rename the Dataframe, since I said all tables for use in Power BI would begin with a capital letter
+Traffic=r3
+#deleting the extra temp DataFrames 
+lst=[r3m,r3]  
+del lst
+
+
+
 
 url4='https://apiz.ebay.com/sell/finances/v1/seller_funds_summary'
-#Will come up error if no try and except, if you don’t have an order in process or on its way
+
 try:
     sf=requests.get(url4, headers=header).json()
 except:
@@ -129,7 +178,7 @@ except:
     print('None')
 
 #######Sellerfunds (above) is an end product table 
-   
+    
 dttoday = date.today()
 sixtyday= dttoday - timedelta(60)
 dttoday = str(dttoday)
@@ -137,14 +186,13 @@ sixtyday= str(dttoday)
 filter060 = 'date_range:'+'%5B' + dttoday + '..' + sixtyday + '%5D'
 
 ###### Order History Table Request and Pandas work below
-url5='https://api.ebay.com/sell/fulfillment/v1/order?filter=creationdate:{filter060}&limit=500&offset=0'
-orders=requests.get(url5, headers=header).json()
-orders=pd.json_normalize(orders)
+
 
 from datetime import datetime
+
 dttoday = datetime.now()
 sixtyday= dttoday - timedelta(60)
-print(sixtyday)
+
 dttoday = str(dttoday)
 sixtyday= str(sixtyday)
 filter060 = 'date_range:'+'%5B' + dttoday + '..' + sixtyday
@@ -152,22 +200,132 @@ dttoday = dttoday[:10] + 'T' + dttoday[10:] + 'Z'
 dttoday= dttoday.replace(" ","")
 sixtyday= '%5B' + sixtyday[:10] + 'T00:00:00.001Z..'+ '%5D'
 filter060= str(sixtyday)
-print(filter060)
 
-url5='https://api.ebay.com/sell/fulfillment/v1/order?filter=creationdate:'+filter060+'&limit=500&offset=0'
+#Fulfillment table with lots of data nested
+url5='https://api.ebay.com/sell/fulfillment/v1/order?filter=creationdate:'+f'{filter060}'+'&limit=500&offset=0'
 orders=requests.get(url5, headers=header).json()
-orders=pd.json_normalize(orders)
-orders=orders.explode('orders')
-orders=pd.json_normalize(orders['orders'])
-orders=orders.explode('fulfillmentStartInstructions')
-orders=orders.explode('lineItems')
-orders=orders.explode('paymentSummary.payments')
-o1=pd.DataFrame(orders['lineItems'])
-o1=pd.json_normalize(o1['lineItems'])
-o2=pd.DataFrame(orders['fulfillmentStartInstructions'])
-o2=pd.json_normalize(o2['fulfillmentStartInstructions'])
-o3=pd.DataFrame(orders['paymentSummary.payments'])
-o3=pd.json_normalize(o3['paymentSummary.payments'])
-OSummary=pd.concat([o1, o2, o3], axis=1).reindex(result.index)
-orders=orders.drop(columns=['fulfillmentStartInstructions','lineItems','paymentSummary.payments'])
-OHistory=pd.concat([OSummary,orders], axis=1).reindex(result.index)  #####Final output table
+orders=pd.DataFrame(orders)
+
+orders2=pd.json_normalize(orders['orders'])
+orders2=orders2.explode('fulfillmentHrefs')
+orders=orders.drop(columns=['orders'])
+
+orders3=orders2.explode('fulfillmentStartInstructions')
+orders3=pd.json_normalize(orders3['fulfillmentStartInstructions'])
+
+
+orders4=orders2.explode('lineItems')
+orders4=pd.json_normalize(orders4['lineItems'])
+
+orders5=pd.DataFrame(orders2['paymentSummary.payments'])
+orders5=orders5.explode('paymentSummary.payments')
+orders5=(orders5['paymentSummary.payments']).apply(pd.Series)
+orders5a=pd.json_normalize(orders5['amount'])
+orders5=pd.concat([orders5,orders5a],axis=1)
+orders5=orders5.rename(columns={'value':'Payment','currency':'PaymentCurrency'})
+orders5=orders5.drop(columns=['amount'])
+
+orders6=pd.DataFrame(orders2['paymentSummary.refunds'])
+orders6=orders6.explode('paymentSummary.refunds')
+
+orders7=pd.DataFrame(orders2['cancelStatus.cancelRequests'])
+orders7=(orders7['cancelStatus.cancelRequests']).apply(pd.Series)
+
+orders2=orders2.drop(columns=['lineItems','fulfillmentStartInstructions','cancelStatus.cancelRequests','paymentSummary.payments','paymentSummary.refunds'])
+
+
+orders8=pd.DataFrame(orders4['ebayCollectAndRemitTaxes'])
+orders8=orders8.explode('ebayCollectAndRemitTaxes')
+orders8=(orders8['ebayCollectAndRemitTaxes']).apply(pd.Series)
+
+
+orders9=(orders8['amount']).apply(pd.Series)
+orders8=orders8.drop(columns=[0,'amount'])
+orders9=orders9.drop(columns=[0])
+
+
+
+orders9=orders9.rename(columns={'currency':'taxCurrency','value':'taxAmount'})
+
+orders10=pd.DataFrame(orders4['taxes'])
+orders10=(orders10['taxes']).apply(pd.Series)
+
+
+orders11=pd.DataFrame(orders4['appliedPromotions'])
+orders11=(orders11['appliedPromotions']).apply(pd.Series)
+
+Fulfillment= pd.concat([orders, orders2,orders3,orders5,orders6,orders7,orders4,orders8,orders9,orders10,orders11], axis=1)
+
+
+lst = [orders, orders2,orders3,orders5,orders6,orders7,orders4,orders8,orders9,orders10,orders11]
+del lst     # memory is released
+
+Fulfillment.head()
+
+
+#Below is the start of the intgeration of the map for Power BI
+#First, the Zip Codes are extracted to the new DataFrame 'MapCodes'
+
+MapCodes=pd.DataFrame(Fulfillment['buyer.taxAddress.postalCode'])
+MapCodes=MapCodes.rename(columns={'buyer.taxAddress.postalCode':'ZipCode'})
+
+#I decided to try Google's API for printing a static Map.  This requires an API Key
+
+longzip=''
+for z in MapCodes['ZipCode']:
+    longzip=  longzip + '|' + z
+
+longzip= longzip + '|'
+
+
+
+
+#Parameters for the Google Api Query
+url='https://maps.googleapis.com/maps/api/staticmap?'
+key='XXXYOURGOOGLESTATICMAPAPIKEYHERE' #Your API Key
+size='1280x960'
+scale='2'
+zoom = '4'
+center='39.809879,-98.556732'
+maptype='roadmap'
+markers='color:red'
+msize='|mid'
+
+marks= msize+longzip
+marks=urllib.parse.quote(marks)
+
+#Making the params into a string
+params= (
+    f'key={key}&'
+    f'size={size}&'
+    f'scale={scale}&'
+    f'center={center}&'
+    f'zoom={zoom}&'
+    f'maptype={maptype}&'
+    f'size={msize}')
+    
+params=params+marks
+
+url=url+params
+
+response=requests.get(url,params=params)
+with open('c:\python\map.png', 'wb') as file: #This saves an image of the map from the Google API
+    file.write(response.content)
+
+#Starting the geocoding of the ZipCodes. 
+from geopy.geocoders import ArcGIS
+
+
+coder = ArcGIS()
+MapCodes["Coordinates"]=MapCodes["ZipCode"].apply(coder.geocode)
+MapCodes["Latitude"]= MapCodes["Coordinates"].apply(lambda x: x.latitude if x != None else None)
+MapCodes["Longitude"]=MapCodes["Coordinates"].apply(lambda x: x.longitude if x!= None else None)
+
+
+MapCodes=MapCodes.drop(columns={'Coordinates'})
+
+
+
+
+
+
